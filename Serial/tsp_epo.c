@@ -8,45 +8,59 @@
 #define NUM_PENGUINS 50
 #define MAX_ITERATIONS 500
 
-// struttura città
+/*
+Structure of a city in x and y coordinates
+*/
 typedef struct {
     double x, y;
 } City;
 
-// distanza tra due città
+/*
+Structure to represent a penguin (path and cost)
+*/
+typedef struct {
+    int path[NUM_CITIES];
+    double cost;
+} Penguin;
+
+/*
+Calculate the distance between two cities
+*/
 double distance(City a, City b) {
     return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2));
 }
 
-double calculate_path_length(City cities[], int path[], int num_cities) {
+/*
+Calculate the length of the route to visit all the cities and return to the starting point
+*/
+double calculate_path_length(City cities[], Penguin* penguin, int num_cities) {
     double total_distance = 0.0;
     for (int i = 0; i < num_cities - 1; i++) {
-        total_distance += distance(cities[path[i]], cities[path[i + 1]]);
+        total_distance += distance(cities[penguin->path[i]], cities[penguin->path[i + 1]]);
     }
-    total_distance += distance(cities[path[num_cities - 1]], cities[path[0]]);
+    // Distance between the last city visited and the city of departure
+    total_distance += distance(cities[penguin->path[num_cities - 1]], cities[penguin->path[0]]);
     return total_distance;
 }
 
-// genera percorso casuale
-void generate_random_path(int path[], int num_cities) {
-    for (int i = 0; i < num_cities; i++) {
-        path[i] = i;
+/* 
+Generates a random route containing all cities
+*/
+void generate_random_path(Penguin* penguin, int num_cities) {
+    for (int i = 1; i < num_cities; i++) {
+        penguin->path[i] = i;
     }
-    for (int i = 0; i < num_cities; i++) {
-        int j = rand() % num_cities;
-        int temp = path[i];
-        path[i] = path[j];
-        path[j] = temp;
-    }
-}
-
-void copy_path(int dest[], int src[], int num_cities) {
-    for (int i = 0; i < num_cities; i++) {
-        dest[i] = src[i];
+    for (int i = 1; i < num_cities; i++) {
+        int j = 1 + rand() % (num_cities - 1); 
+        int temp = penguin->path[i];
+        penguin->path[i] = penguin->path[j];
+        penguin->path[j] = temp;
     }
 }
 
-// Funzione per verificare se una città è già nel percorso
+/*
+Check if a city is already present in the route
+*/
 int contains(int* path, int city, int num_cities) {
     for (int i = 0; i < num_cities; i++) {
         if (path[i] == city) {
@@ -56,100 +70,146 @@ int contains(int* path, int city, int num_cities) {
     return 0; 
 }
 
-// Crossover tra follower e leader
-void crossover(int* follower_path, int* leader_path, int num_cities, int start, int end) {
+/*
+Create the new follower route by taking the leader's route as the 
+initial part of the route and filling the remaining positions with 
+the follower's cities not yet visited
+*/
+void crossover(Penguin* follower, Penguin* leader, int num_cities, int start, int end) {
+    //Create an empty array of the same size as the original path
     int* new_path = (int*)malloc(num_cities * sizeof(int));
     int i, index = 0;
-    memset(new_path, -1, num_cities * sizeof(int)); // Inizializza con -1 (città non assegnata)
+    memset(new_path, -1, num_cities * sizeof(int)); 
 
-    // Copia il segmento dal percorso del leader
+    //Copies only one segment of the leader into the new array
     for (i = start; i <= end; i++) {
-        new_path[i] = leader_path[i];
+        new_path[i] = leader->path[i];
     }
 
-    // Riempi le posizioni rimanenti del follower con le città mancanti
+    //Fills remaining locations with unvisited follower cities
     for (i = 0; i < num_cities; i++) {
         if (new_path[i] == -1) {
-            while (contains(new_path, follower_path[index], num_cities)) {
+            while (contains(new_path, follower->path[index], num_cities)) {
                 index++;
             }
-            new_path[i] = follower_path[index];
+            new_path[i] = follower->path[index];
             index++;
         }
     }
 
-    copy_path(follower_path, new_path, num_cities);
+    //Copy this new array in place of the follower array
+    for (i = 0; i < num_cities; i++) {
+        follower->path[i] = new_path[i];
+    }
+
     free(new_path);
 }
 
-// Emperor Penguin Optimization
+/*
+Performs the calculation to find the best path for each iteration and updates the position of the followers
+*/
 void emperor_penguin_optimization(City cities[], int num_cities, int num_penguins, int max_iterations) {
-    int paths[NUM_PENGUINS][NUM_CITIES]; 
-    double fitness[NUM_PENGUINS];        
-    int best_path[NUM_CITIES];           
-    double best_fitness = INFINITY;      
+    Penguin penguins[NUM_PENGUINS];    
+    double best_fitness = INFINITY;     
+    Penguin best_penguin;              
 
-    // Inizializza la popolazione di pinguini
+    //Generate a complete path for each penguin
     for (int i = 0; i < num_penguins; i++) {
-        generate_random_path(paths[i], num_cities);
-        fitness[i] = calculate_path_length(cities, paths[i], num_cities);
-        if (fitness[i] < best_fitness) {
-            best_fitness = fitness[i];
-            copy_path(best_path, paths[i], num_cities);
+        generate_random_path(&penguins[i], num_cities);
+        //Calculate the length of each path
+        penguins[i].cost = calculate_path_length(cities, &penguins[i], num_cities);
+        //Find the best path and copy it into best_penguin
+        if (penguins[i].cost < best_fitness) {
+            best_fitness = penguins[i].cost;
+            best_penguin = penguins[i];
         }
     }
 
+    //Counter for iterations without improvement
+    int iterations_without_improvement = 0;  
+
+    //Execute for each iteration
     for (int iter = 0; iter < max_iterations; iter++) {
-        // Dividi i pinguini in migliori e follower
+        //Recalculate the best penguin
+        int best_found_in_iteration = 0; // Flag to track if improvement is found in the current iteration
         for (int i = 0; i < num_penguins; i++) {
-            if (fitness[i] < best_fitness) {
-                best_fitness = fitness[i];
-                copy_path(best_path, paths[i], num_cities);
+            if (penguins[i].cost < best_fitness) {
+                best_fitness = penguins[i].cost;
+                best_penguin = penguins[i];
+                best_found_in_iteration = 1;  // Mark that an improvement was found
             }
         }
 
-        // Aggiorna i follower
+        //Update followers
         for (int i = 0; i < num_penguins; i++) {
-            if (fitness[i] > best_fitness) {
-                // Follower: prendi una parte del percorso del leader e mescolalo con il proprio
+            // If the length is greater than the optimal one, change part of the path
+            if (penguins[i].cost > best_fitness) {
                 int start = rand() % num_cities;
                 int end = start + rand() % (num_cities - start); 
-                crossover(paths[i], best_path, num_cities, start, end);
-                
-                // Calcola la nuova fitness
-                fitness[i] = calculate_path_length(cities, paths[i], num_cities);
-                if (fitness[i] < best_fitness) {
-                    best_fitness = fitness[i];
-                    copy_path(best_path, paths[i], num_cities);
+                crossover(&penguins[i], &best_penguin, num_cities, start, end);
+
+                //Calculate the new fitness
+                penguins[i].cost = calculate_path_length(cities, &penguins[i], num_cities);
+                //If the length is less than optimal, update the best route
+                if (penguins[i].cost < best_fitness) {
+                    best_fitness = penguins[i].cost;
+                    best_penguin = penguins[i];
+                    best_found_in_iteration = 1;  
                 }
             }
         }
-         // Stampa il miglior percorso trovato ad ogni iterazione
-        printf("Iterazione %d: Miglior Percorso Lunghezza = %.2f\n", iter + 1, best_fitness);
+
+        //Increment the counter if no improvement was found in this iteration
+        if (!best_found_in_iteration) {
+            iterations_without_improvement++;
+        } else {
+            iterations_without_improvement = 0;  
+        }
+
+        //If no improvement has been made in 30 iterations, stop the algorithm
+        if (iterations_without_improvement >= 30) {
+            printf("No improvement after 30 iterations, stopping...\n");
+            break;
+        }
+
+        //Print the best route at the end of the iteration
+        printf("Iteration %d: Best Path Length = %.2f\n", iter + 1, best_fitness);
     }
 
-    // Stampa il risultato finale
-    printf("Lunghezza del Percorso Ottimale: %.2f\n", best_fitness);
+    //Print the best route at the end of all the iterations
+    printf("Optimal Path Length: %.2f\n", best_fitness);
+}
+
+
+
+//Function to read the cities from a file
+void read_cities_from_file(City cities[], const char* filename, int num_cities) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        printf("Error opening file %s\n", filename);
+        exit(1);
+    }
+    for (int i = 0; i < num_cities; i++) {
+        fscanf(file, "%lf %lf", &cities[i].x, &cities[i].y);
+    }
+    fclose(file);
 }
 
 int main() {
     srand(time(NULL));
 
-    // Genera un insieme di città casuali
+    //Read cities from file
     City cities[NUM_CITIES];
-    for (int i = 0; i < NUM_CITIES; i++) {
-        cities[i].x = rand() % 100;
-        cities[i].y = rand() % 100;
-    }
+    read_cities_from_file(cities, "cities.txt", NUM_CITIES);
 
-    // Misura il tempo di esecuzione
+    //Measure execution time
     clock_t start = clock();
 
-    // Applica l'algoritmo EPO al problema del TSP
+    //Apply the EPO algorithm to the TSP problem
     emperor_penguin_optimization(cities, NUM_CITIES, NUM_PENGUINS, MAX_ITERATIONS);
 
     clock_t end = clock();
-    printf("Tempo di Esecuzione: %.2f secondi\n", (double)(end - start) / CLOCKS_PER_SEC);
+    printf("Execution Time: %.2f seconds\n", (double)(end - start) / CLOCKS_PER_SEC);
 
     return 0;
 }
