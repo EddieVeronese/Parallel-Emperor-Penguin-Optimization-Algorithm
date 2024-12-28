@@ -3,6 +3,7 @@
 #include <math.h>
 #include <time.h>
 #include <string.h>
+#include <mpi.h>
 
 #define NUM_CITIES 4000
 #define NUM_PENGUINS 50
@@ -108,13 +109,13 @@ void crossover(Penguin* follower, Penguin* leader, int num_cities, int start, in
 /*
 Performs the calculation to find the best path for each iteration and updates the position of the followers
 */
-void emperor_penguin_optimization(City cities[], int num_cities, int num_penguins, int max_iterations) {
-    Penguin penguins[NUM_PENGUINS];    
+void emperor_penguin_optimization(City cities[], int num_cities, int num_penguins, int max_iterations, int rank, int size) {
+    Penguin penguins[NUM_PENGUINS / size];    
     double best_fitness = INFINITY;     
-    Penguin best_penguin;              
+    Penguin best_penguin;             
 
     //Generate a complete path for each penguin
-    for (int i = 0; i < num_penguins; i++) {
+    for (int i = 0; i < num_penguins / size; i++) {
         generate_random_path(&penguins[i], num_cities);
         //Calculate the length of each path
         penguins[i].cost = calculate_path_length(cities, &penguins[i], num_cities);
@@ -132,7 +133,7 @@ void emperor_penguin_optimization(City cities[], int num_cities, int num_penguin
     for (int iter = 0; iter < max_iterations; iter++) {
         //Recalculate the best penguin
         int best_found_in_iteration = 0; // Flag to track if improvement is found in the current iteration
-        for (int i = 0; i < num_penguins; i++) {
+        for (int i = 0; i < num_penguins / size; i++) {
             if (penguins[i].cost < best_fitness) {
                 best_fitness = penguins[i].cost;
                 best_penguin = penguins[i];
@@ -141,7 +142,7 @@ void emperor_penguin_optimization(City cities[], int num_cities, int num_penguin
         }
 
         //Update followers
-        for (int i = 0; i < num_penguins; i++) {
+         for (int i = 0; i < num_penguins / size; i++) {
             // If the length is greater than the optimal one, change part of the path
             if (penguins[i].cost > best_fitness) {
                 int start = rand() % num_cities;
@@ -168,16 +169,34 @@ void emperor_penguin_optimization(City cities[], int num_cities, int num_penguin
 
         //If no improvement has been made in 30 iterations, stop the algorithm
         if (iterations_without_improvement >= 1000) {
-            printf("No improvement after 1000 iterations, stopping...\n");
+            printf("No improvement after 100 iterations, stopping...\n");
             break;
         }
 
         //Print the best route at the end of the iteration
-        printf("Iteration %d: Best Path Length = %.2f\n", iter + 1, best_fitness);
+        if (rank == 0) {
+            printf("Iteration %d: Best Path Length = %.2f\n", iter + 1, best_fitness);
+        }
+
+
+        MPI_Barrier(MPI_COMM_WORLD);
+        double global_best_fitness;
+        Penguin global_best_penguin;
+        MPI_Allreduce(&best_fitness, &global_best_fitness, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+
+        if (best_fitness == global_best_fitness) {
+            global_best_penguin = best_penguin;
+        }
+
+        MPI_Bcast(&global_best_penguin, sizeof(Penguin), MPI_BYTE, 0, MPI_COMM_WORLD);
+        best_fitness = global_best_fitness;
+        best_penguin = global_best_penguin;
     }
 
     //Print the best route at the end of all the iterations
-    printf("Optimal Path Length: %.2f\n", best_fitness);
+    if (rank == 0) {
+        printf("Optimal Path Length: %.2f\n", best_fitness);
+    }
 }
 
 
@@ -195,21 +214,37 @@ void read_cities_from_file(City cities[], const char* filename, int num_cities) 
     fclose(file);
 }
 
-int main() {
+int main(int argc, char** argv) {
     srand(time(NULL));
+
+    MPI_Init(&argc, &argv);
+    int rank, size;
+
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     //Read cities from file
     City cities[NUM_CITIES];
-    read_cities_from_file(cities, "cities.txt", NUM_CITIES);
+    if (rank == 0) {
+        read_cities_from_file(cities, "cities.txt", NUM_CITIES);
+    }
+
+    MPI_Bcast(cities, NUM_CITIES * sizeof(City), MPI_BYTE, 0, MPI_COMM_WORLD);
+
 
     //Measure execution time
     clock_t start = clock();
 
     //Apply the EPO algorithm to the TSP problem
-    emperor_penguin_optimization(cities, NUM_CITIES, NUM_PENGUINS, MAX_ITERATIONS);
+    emperor_penguin_optimization(cities, NUM_CITIES, NUM_PENGUINS, MAX_ITERATIONS, rank, size);
 
     clock_t end = clock();
-    printf("Execution Time: %.2f seconds\n", (double)(end - start) / CLOCKS_PER_SEC);
+
+    if (rank == 0) {
+        printf("Execution Time: %.2f seconds\n", (double)(end - start) / CLOCKS_PER_SEC);
+    }
+
+    MPI_Finalize();
 
     return 0;
 }

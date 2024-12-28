@@ -8,10 +8,17 @@ gcc generate_cities.c -o generate_cities
 ./generate_cities.exe
 ```
 
-Then you can use EPO to fix the TSP problem with the following commands:
+Then you can use EPO_TSP with the following commands in the serial folder:
 ```bash
-gcc tsp_epo.c -o tsp_epo
-.\tsp_epo.exe
+mpicc -g -Wall -std=c99 -o tsp_epo  tsp_epo.c -lm
+qsub tsp_epo.sh
+```
+
+
+You can also use EPO_TSP with the following commands in the parallel folder:
+```bash
+mpicc -g -Wall -std=c99 -o tsp_epo_par  tsp_epo_par.c -lm
+qsub tsp_epo_par.sh
 ```
 
 ## Parallelizzazione
