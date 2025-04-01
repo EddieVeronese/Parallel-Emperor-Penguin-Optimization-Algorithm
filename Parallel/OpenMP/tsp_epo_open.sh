@@ -3,9 +3,10 @@
 #PBS -l walltime=6:00:00
 #PBS -q short_cpuQ
 module load mpich-3.2
+module load gcc
 
 cd $PBS_O_WORKDIR
 
 export OMP_NUM_THREADS=4
 
-mpirun.actual -n 8 ./tsp_epo_par2
+./tsp_epo_openmp
