@@ -3,6 +3,7 @@
 #include <math.h>
 #include <time.h>
 #include <mpi.h>
+#include <omp.h>
 
 #define MAX_CITIES 16000
 #define MAX_PENGUINS 500
@@ -137,22 +138,40 @@ void run_epo(City cities[], int num_cities, int num_penguins, int num_iterations
             printf(">> Iterazione %d/%d\n", iter + 1, num_iterations);
 
         int local_leader_index = 0;
-        double local_best = calculate_path_length(population[0], num_cities);
+        double local_best = INFINITY;
 
-        for (int i = 0; i < local_penguins; i++) {
-            double len = calculate_path_length(population[i], num_cities);
-            if (rank == 0 && log_file)
-                fprintf(log_file, "%d,%d,%.2f\n", iter + 1, i + rank * local_penguins, len);
-            if (len < local_best) {
-                local_best = len;
-                local_leader_index = i;
+        #pragma omp parallel
+        {
+            int thread_leader = -1;
+            double thread_best = INFINITY;
+
+            #pragma omp for
+            for (int i = 0; i < local_penguins; i++) {
+                double len = calculate_path_length(population[i], num_cities);
+                #pragma omp critical
+                {
+                    if (rank == 0 && log_file)
+                        fprintf(log_file, "%d,%d,%.2f\n", iter + 1, i + rank * local_penguins, len);
+                }
+
+                if (len < thread_best) {
+                    thread_best = len;
+                    thread_leader = i;
+                }
+            }
+
+            #pragma omp critical
+            {
+                if (thread_best < local_best) {
+                    local_best = thread_best;
+                    local_leader_index = thread_leader;
+                }
             }
         }
 
         City local_leader[MAX_CITIES];
-        for (int i = 0; i < num_cities; i++) {
+        for (int i = 0; i < num_cities; i++)
             local_leader[i] = population[local_leader_index][i];
-        }
 
         struct {
             double len;
@@ -178,6 +197,7 @@ void run_epo(City cities[], int num_cities, int num_penguins, int num_iterations
                 best_path[i] = leader_global[i];
         }
 
+        #pragma omp parallel for
         for (int i = 0; i < local_penguins; i++) {
             if (i == local_leader_index && rank == out.rank) continue;
             double start_percent = (i % 5) * 0.2;
@@ -204,6 +224,8 @@ int main(int argc, char *argv[]) {
         MPI_Finalize();
         return 1;
     }
+
+    printf(">> [MPI %d/%d] OpenMP: %d thread disponibili\n", rank, size, omp_get_max_threads());
 
     srand(time(NULL) + rank);
 

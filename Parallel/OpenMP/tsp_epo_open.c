@@ -1,214 +1,231 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <float.h>
-#include <omp.h>
 #include <time.h>
+#include <omp.h>  // <-- OpenMP
 
-#define MAX_CITIES 10000  // Numero massimo di città nel dataset (leggi dal file)
-#define MAX_ITERATIONS 300  // Numero massimo di iterazioni
-#define NUM_PENGUINS 100  // Numero di pinguini nella popolazione
+#define MAX_CITIES 16000
+#define MAX_PENGUINS 500
 
-// Dati globali
-int num_cities;
-double distances[MAX_CITIES][MAX_CITIES];
-int path[MAX_CITIES];
-int best_path[MAX_CITIES];
-double best_distance = DBL_MAX;
+typedef struct {
+    int id;
+    double x, y;
+} City;
 
-// Funzione per calcolare la distanza euclidea tra due città
-double euclidean_distance(int i, int j, double cities[][2]) {
-    return sqrt(pow(cities[i][0] - cities[j][0], 2) + pow(cities[i][1] - cities[j][1], 2));
+double calculate_distance(City a, City b) {
+    double dx = a.x - b.x;
+    double dy = a.y - b.y;
+    return sqrt(dx * dx + dy * dy);
 }
 
-// Funzione per calcolare la lunghezza totale di un percorso
-double path_length(int *path) {
-    double total_distance = 0.0;
+double calculate_path_length(City path[], int num_cities) {
+    double total = 0.0;
     for (int i = 0; i < num_cities - 1; i++) {
-        total_distance += distances[path[i]][path[i + 1]];
+        total += calculate_distance(path[i], path[i + 1]);
     }
-    total_distance += distances[path[num_cities - 1]][path[0]];  // ritorno al punto di partenza
-    return total_distance;
+    total += calculate_distance(path[num_cities - 1], path[0]);
+    return total;
 }
 
-// Funzione per calcolare le distanze tra tutte le città (pre-calcolo)
-void calculate_distances(double cities[][2]) {
-    #pragma omp parallel for
+int read_cities(const char *filename, City cities[], int num_cities) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        printf("Errore: impossibile aprire il file '%s'\n", filename);
+        return 0;
+    }
+
     for (int i = 0; i < num_cities; i++) {
-        for (int j = i + 1; j < num_cities; j++) {
-            distances[i][j] = euclidean_distance(i, j, cities);
-            distances[j][i] = distances[i][j];
+        if (fscanf(file, "%lf %lf", &cities[i].x, &cities[i].y) != 2) {
+            printf("Errore: città %d non letta correttamente\n", i);
+            fclose(file);
+            return 0;
+        }
+    }
+    fclose(file);
+    printf(">> Letti %d città da '%s'\n", num_cities, filename);
+    return 1;
+}
+
+void shuffle_path(City path[], int num_cities) {
+    for (int i = 0; i < num_cities * 2; i++) {
+        int a = rand() % num_cities;
+        int b = rand() % num_cities;
+        City temp = path[a];
+        path[a] = path[b];
+        path[b] = temp;
+    }
+}
+
+void copy_leader_segment(City leader[], City follower[], int num_cities, double start_percent) {
+    int segment_size = num_cities * 0.8;
+    int start = (int)(num_cities * start_percent);
+    int end = start + segment_size;
+    if (end > num_cities) end = num_cities;
+
+    int used[MAX_CITIES] = {0};
+
+    for (int i = start; i < end; i++) {
+        follower[i] = leader[i];
+        for (int j = 0; j < num_cities; j++) {
+            if (leader[i].x == leader[j].x && leader[i].y == leader[j].y) {
+                used[j] = 1;
+                break;
+            }
+        }
+    }
+
+    for (int i = 0; i < num_cities; i++) {
+        if (i >= start && i < end) continue;
+        while (1) {
+            int r = rand() % num_cities;
+            if (!used[r]) {
+                follower[i] = leader[r];
+                used[r] = 1;
+                break;
+            }
         }
     }
 }
 
-// Funzione di ottimizzazione locale (2-opt)
-void local_search(int *path) {
-    int i, j;
-    double best_len = path_length(path);
+void mutate_path(City path[], int num_cities, int iter, int max_iter) {
+    double cooling_factor = 1.0 - ((double)iter / max_iter);
+    int swaps = (int)(num_cities * 0.2 * cooling_factor);
+    if (swaps < 2) swaps = 2;
 
-    // Parallelizzazione della ricerca locale per ogni pinguino
-    #pragma omp parallel for private(i, j)
-    for (i = 0; i < num_cities - 1; i++) {
-        for (j = i + 1; j < num_cities; j++) {
-            if (i != j) {
-                // Scambia i due segmenti
-                int temp = path[i];
-                path[i] = path[j];
-                path[j] = temp;
+    for (int i = 0; i < swaps; i++) {
+        int a = rand() % num_cities;
+        int b = rand() % num_cities;
+        City temp = path[a];
+        path[a] = path[b];
+        path[b] = temp;
+    }
+}
 
-                double new_len = path_length(path);
-                if (new_len < best_len) {
-                    best_len = new_len;
-                    #pragma omp critical
-                    {
-                        for (int k = 0; k < num_cities; k++) {
-                            best_path[k] = path[k];
-                        }
-                    }
-                } else {
-                    // Ripristina l'ordine
-                    path[j] = path[i];
-                    path[i] = temp;
+void run_epo(City cities[], int num_cities, int num_penguins, int num_iterations, City best_path[]) {
+    printf(">> Inizio EPO con %d pinguini, %d città, %d iterazioni\n", num_penguins, num_cities, num_iterations);
+
+    FILE *log_file = fopen("epo_log.csv", "w");
+    if (!log_file) {
+        printf("Errore: impossibile creare il file di log.\n");
+        return;
+    }
+    fprintf(log_file, "iterazione,pinguino,lunghezza\n");
+
+    static City population[MAX_PENGUINS][MAX_CITIES];
+
+    // Parallel init
+    #pragma omp parallel for
+    for (int i = 0; i < num_penguins; i++) {
+        for (int j = 0; j < num_cities; j++) {
+            population[i][j] = cities[j];
+        }
+        shuffle_path(population[i], num_cities);
+    }
+    printf(">> Generati percorsi iniziali casuali per i pinguini\n");
+
+    double best_length = INFINITY;
+
+    for (int iter = 0; iter < num_iterations; iter++) {
+        printf(">> Iterazione %d/%d\n", iter + 1, num_iterations);
+        int leader_index = 0;
+        double leader_length = INFINITY;
+
+        #pragma omp parallel
+        {
+            int local_leader = -1;
+            double local_best = INFINITY;
+
+            #pragma omp for nowait
+            for (int i = 0; i < num_penguins; i++) {
+                double current_length = calculate_path_length(population[i], num_cities);
+
+                #pragma omp critical
+                fprintf(log_file, "%d,%d,%.2f\n", iter + 1, i, current_length);
+
+                if (current_length < local_best) {
+                    local_best = current_length;
+                    local_leader = i;
+                }
+            }
+
+            #pragma omp critical
+            {
+                if (local_best < leader_length) {
+                    leader_length = local_best;
+                    leader_index = local_leader;
                 }
             }
         }
-    }
-}
 
-// Funzione per leggere le città da un file
-int read_cities_from_file(const char *filename, double cities[][2], int max_cities) {
-    FILE *file = fopen(filename, "r");
-    if (file == NULL) {
-        printf("Error opening file %s\n", filename);
-        return -1;
-    }
+        printf("   >> Leader: Pinguino %d con lunghezza %.2f\n", leader_index, leader_length);
 
-    int i = 0;
-    while (fscanf(file, "%lf %lf", &cities[i][0], &cities[i][1]) == 2 && i < max_cities) {
-        i++;
-    }
-    fclose(file);
-    return i;
-}
-
-// Funzione per inizializzare il percorso (ordine casuale delle città)
-void initialize_path(int *path) {
-    for (int i = 0; i < num_cities; i++) {
-        path[i] = i;
-    }
-
-    // Shuffle per ottenere un percorso casuale
-    for (int i = 0; i < num_cities; i++) {
-        int j = rand() % num_cities;
-        int temp = path[i];
-        path[i] = path[j];
-        path[j] = temp;
-    }
-}
-
-// Funzione per raccogliere i migliori risultati con OpenMP
-void gather_results(int rank, double *best_distance, int *best_path) {
-    double global_best_distance;
-    int global_best_path[MAX_CITIES];
-
-    // Uso di una sezione critica per evitare conflitti tra i thread
-    #pragma omp parallel
-    {
-        #pragma omp single
-        {
-            global_best_distance = *best_distance;
+        if (leader_length < best_length) {
+            best_length = leader_length;
             for (int i = 0; i < num_cities; i++) {
-                global_best_path[i] = best_path[i];
+                best_path[i] = population[leader_index][i];
             }
         }
-    }
-    // Uso di una riduzione per ottenere il miglior risultato
-    #pragma omp parallel for reduction(min: global_best_distance)
-    for (int i = 0; i < num_cities; i++) {
-        if (*best_distance < global_best_distance) {
-            global_best_distance = *best_distance;
+
+        #pragma omp parallel for
+        for (int i = 0; i < num_penguins; i++) {
+            if (i == leader_index) continue;
+            double start_percent = (i % 5) * 0.2;
+            copy_leader_segment(population[leader_index], population[i], num_cities, start_percent);
+            mutate_path(population[i], num_cities, iter, num_iterations);
         }
     }
-    *best_distance = global_best_distance;
+
+    fclose(log_file);
+    printf(">> Fine EPO\n");
 }
 
-// Funzione principale per il calcolo parallelo del TSP
-void emperor_penguin_optimization(int rank, int size, double cities[][2]) {
-    // Distribuzione iniziale del lavoro (ogni processo lavora su un sottoinsieme dei pinguini)
-    int local_best_path[MAX_CITIES];
-    double local_best_distance = DBL_MAX;
-    int global_best_path[MAX_CITIES];
-    double global_best_distance;
+int main(int argc, char *argv[]) {
+    printf(">> OpenMP: %d thread disponibili\n", omp_get_max_threads());
 
-    // Inizializzazione dei pinguini
-    initialize_path(path);
-    local_best_distance = path_length(path);
-    for (int i = 0; i < num_cities; i++) {
-        local_best_path[i] = path[i];
+    if (argc != 4) {
+        printf("Uso: %s <file_citta> <numero_citta> <numero_iterazioni>\n", argv[0]);
+        return 1;
     }
 
-    // Esegui la ricerca locale (2-opt)
-    local_search(local_best_path);
-    local_best_distance = path_length(local_best_path);
+    srand(time(NULL));
 
-    // Sincronizzazione e raccolta dei migliori risultati
-    gather_results(rank, &local_best_distance, local_best_path);
+    const char *filename = argv[1];
+    int num_cities = atoi(argv[2]);
+    int num_iterations = atoi(argv[3]);
+    int num_penguins = num_cities / 100;
+    if (num_penguins < 5) num_penguins = 5;
 
-    // Aggiornamento globale
-    if (rank == 0) {
-        global_best_distance = local_best_distance;
-        for (int i = 0; i < num_cities; i++) {
-            global_best_path[i] = local_best_path[i];
-        }
+    if (num_cities > MAX_CITIES) {
+        printf("Errore: numero città troppo grande. Max consentito: %d\n", MAX_CITIES);
+        return 1;
+    }
+    if (num_penguins > MAX_PENGUINS) {
+        printf("Errore: numero pinguini troppo grande. Max consentito: %d\n", MAX_PENGUINS);
+        return 1;
     }
 
-    // Stampa del miglior percorso trovato
-    if (rank == 0) {
-        printf("Best path found by EPO (Length: %.2f):\n", global_best_distance);
-        for (int i = 0; i < num_cities; i++) {
-            printf("%d -> ", global_best_path[i]);
-        }
-        printf("%d\n", global_best_path[0]);  // Ritorno alla città iniziale
+    City cities[MAX_CITIES];
+    if (!read_cities(filename, cities, num_cities)) {
+        printf("Errore nella lettura delle città.\n");
+        return 1;
     }
-}
 
-// Funzione per inizializzare OpenMP e avviare l'algoritmo
-int main(int argc, char **argv) {
-    double cities[MAX_CITIES][2];
-    int rank, size;
-    
-    // Inizializzazione di OpenMP
-    #pragma omp parallel
-    {
-        #pragma omp master
-        {
-            // Lettura del numero di città da analizzare (parametro di input)
-            if (argc < 2) {
-                printf("Usage: %s <number_of_cities_to_analyze>\n", argv[0]);
-                return -1;
-            }
+    City best_path[MAX_CITIES];
 
-            num_cities = atoi(argv[1]); // Numero di città da analizzare
+    // TIMER START
+    double start_time = omp_get_wtime();
 
-            // Assicurati che il numero di città non ecceda il massimo disponibile
-            if (num_cities > MAX_CITIES) {
-                printf("Error: Cannot analyze more than %d cities.\n", MAX_CITIES);
-                return -1;
-            }
+    run_epo(cities, num_cities, num_penguins, num_iterations, best_path);
 
-            // Genera città da file
-            if (read_cities_from_file("cities.txt", cities, MAX_CITIES) < 0) {
-                return -1;
-            }
+    // TIMER END
+    double end_time = omp_get_wtime();
 
-            // Calcola le distanze tra le città
-            calculate_distances(cities);
+    printf("\n>> Calcolo percorso migliore terminato\n");
+    double best_length = calculate_path_length(best_path, num_cities);
+    printf("\nMiglior percorso trovato (lunghezza: %.2f)\n", best_length);
 
-            // Esegui l'Emperor Penguin Optimization (EPO)
-            emperor_penguin_optimization(rank, size, cities);
-        }
-    }
+    // STAMPA TEMPO
+    printf("\n>> Tempo di esecuzione: %.3f secondi\n", end_time - start_time);
 
     return 0;
 }
