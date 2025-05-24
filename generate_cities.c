@@ -6,7 +6,7 @@ void generate_cities(int num_cities, const char* filename) {
     
     FILE *file = fopen(filename, "w");
     if (!file) {
-        printf("Errore nell'aprire il file %s\n", filename);
+        printf("Error opening file %s\n", filename);
         exit(1);
     }
 

@@ -2,51 +2,81 @@
 #include <stdlib.h>
 #include <math.h>
 #include <time.h>
-#include <omp.h>  // <-- OpenMP
+#include <omp.h>  
 
-#define MAX_CITIES 16000
-#define MAX_PENGUINS 500
+#define MAX_CITIES 16000 // Maximum number of cities supported
+#define MAX_PENGUINS 500 // Maximum number of cities supported
 
 typedef struct {
-    int id;
-    double x, y;
+    int id; // Unique city identifier
+    double x, y; // Coordinates of city on 2D plane
 } City;
 
+/**
+ * Compute Euclidean distance between two cities.
+ *
+ * @param a First city
+ * @param b Second city
+ * @return Straight-line distance between cities a and b
+ */
 double calculate_distance(City a, City b) {
     double dx = a.x - b.x;
     double dy = a.y - b.y;
     return sqrt(dx * dx + dy * dy);
 }
 
+/**
+ * Calculate total length of a closed tour visiting all cities once.
+ *
+ * @param path Array of cities in visit order
+ * @param num_cities Number of cities in the path
+ * @return Total tour length, including return to start
+ */
 double calculate_path_length(City path[], int num_cities) {
     double total = 0.0;
     for (int i = 0; i < num_cities - 1; i++) {
         total += calculate_distance(path[i], path[i + 1]);
     }
+    // Close the loop: last city back to first
     total += calculate_distance(path[num_cities - 1], path[0]);
     return total;
 }
 
+/**
+ * Read city coordinates from a file, one pair per line.
+ *
+ * @param filename Path to input file: each line "x y"
+ * @param cities Preallocated array to fill with city data
+ * @param num_cities Number of cities expected
+ * @return 1 on success, 0 on error
+ */
 int read_cities(const char *filename, City cities[], int num_cities) {
     FILE *file = fopen(filename, "r");
     if (!file) {
-        printf("Errore: impossibile aprire il file '%s'\n", filename);
+        printf("Error: Unable to open file '%s'\n", filename);
         return 0;
     }
 
     for (int i = 0; i < num_cities; i++) {
         if (fscanf(file, "%lf %lf", &cities[i].x, &cities[i].y) != 2) {
-            printf("Errore: città %d non letta correttamente\n", i);
+            printf("Error: City %d not read correctly\n", i);
             fclose(file);
             return 0;
         }
     }
     fclose(file);
-    printf(">> Letti %d città da '%s'\n", num_cities, filename);
+    printf(">> Read %d cities from '%s'\n", num_cities, filename);
     return 1;
 }
 
+/**
+ * Randomly shuffle the order of an array of cities.
+ *
+ * @param path Array of cities to shuffle
+ * @param num_cities Number of cities in the array
+ */
 void shuffle_path(City path[], int num_cities) {
+    // Perform 2*num_cities random swaps for thorough mixing
     for (int i = 0; i < num_cities * 2; i++) {
         int a = rand() % num_cities;
         int b = rand() % num_cities;
@@ -56,16 +86,27 @@ void shuffle_path(City path[], int num_cities) {
     }
 }
 
+/**
+ * Copy a contiguous 80% segment of the leader's path into a follower,
+ * then fill remaining positions from unused cities in random order.
+ *
+ * @param leader Source path of the best penguin
+ * @param follower Destination path to be updated
+ * @param num_cities Total number of cities
+ * @param start_percent Fractional start index (0.0 to 0.2)
+ */
 void copy_leader_segment(City leader[], City follower[], int num_cities, double start_percent) {
     int segment_size = num_cities * 0.8;
     int start = (int)(num_cities * start_percent);
     int end = start + segment_size;
     if (end > num_cities) end = num_cities;
 
-    int used[MAX_CITIES] = {0};
+    int used[MAX_CITIES] = {0}; // Flags for cities already copied
 
+    // Copy the central segment from leader to follower
     for (int i = start; i < end; i++) {
         follower[i] = leader[i];
+        // Mark that city as used by matching coordinates
         for (int j = 0; j < num_cities; j++) {
             if (leader[i].x == leader[j].x && leader[i].y == leader[j].y) {
                 used[j] = 1;
@@ -74,6 +115,7 @@ void copy_leader_segment(City leader[], City follower[], int num_cities, double 
         }
     }
 
+    // Fill remaining positions with unused cities
     for (int i = 0; i < num_cities; i++) {
         if (i >= start && i < end) continue;
         while (1) {
@@ -87,6 +129,15 @@ void copy_leader_segment(City leader[], City follower[], int num_cities, double 
     }
 }
 
+/**
+ * Mutate a path by swapping city positions based on a cooling schedule.
+ * Number of swaps decreases as iterations progress.
+ *
+ * @param path Array of cities to mutate
+ * @param num_cities Number of cities
+ * @param iter Current iteration index
+ * @param max_iter Total iterations for cooling schedule
+ */
 void mutate_path(City path[], int num_cities, int iter, int max_iter) {
     double cooling_factor = 1.0 - ((double)iter / max_iter);
     int swaps = (int)(num_cities * 0.2 * cooling_factor);
@@ -101,19 +152,31 @@ void mutate_path(City path[], int num_cities, int iter, int max_iter) {
     }
 }
 
+/**
+ * Core Evolutionary Penguin Optimization (EPO) loop with OpenMP parallelism.
+ * Each thread evaluates a subset of penguin paths, finds the best local path,
+ * then updates all penguins based on the global leader.
+ *
+ * @param cities Array of all city coordinates
+ * @param num_cities Number of cities in the problem
+ * @param num_penguins Total penguin agents
+ * @param num_iterations EPO iterations to perform
+ * @param best_path Output array to store the best discovered path
+ */
 void run_epo(City cities[], int num_cities, int num_penguins, int num_iterations, City best_path[]) {
-    printf(">> Inizio EPO con %d pinguini, %d città, %d iterazioni\n", num_penguins, num_cities, num_iterations);
+    printf(">> Start EPO with %d penguins, %d cities, %d iterations\n", num_penguins, num_cities, num_iterations);
 
+    // Open CSV log file to track iteration progress
     FILE *log_file = fopen("epo_log.csv", "w");
     if (!log_file) {
-        printf("Errore: impossibile creare il file di log.\n");
+        printf("Error: Unable to create log file.\n");
         return;
     }
-    fprintf(log_file, "iterazione,pinguino,lunghezza\n");
+    fprintf(log_file, "iteration,penguin,length\n");
+ 
+    static City population[MAX_PENGUINS][MAX_CITIES]; // Local population of paths
 
-    static City population[MAX_PENGUINS][MAX_CITIES];
-
-    // Parallel init
+    // Initialize random paths in parallel
     #pragma omp parallel for
     for (int i = 0; i < num_penguins; i++) {
         for (int j = 0; j < num_cities; j++) {
@@ -121,33 +184,39 @@ void run_epo(City cities[], int num_cities, int num_penguins, int num_iterations
         }
         shuffle_path(population[i], num_cities);
     }
-    printf(">> Generati percorsi iniziali casuali per i pinguini\n");
+    printf(">> Generate random initial paths for penguins\n");
 
     double best_length = INFINITY;
 
+    // Main optimization loop
     for (int iter = 0; iter < num_iterations; iter++) {
-        printf(">> Iterazione %d/%d\n", iter + 1, num_iterations);
+        printf(">> Iteration %d/%d\n", iter + 1, num_iterations);
         int leader_index = 0;
         double leader_length = INFINITY;
 
+        // Parallel evaluation of each penguin's path
         #pragma omp parallel
         {
             int local_leader = -1;
             double local_best = INFINITY;
 
+            // Distribute work among threads
             #pragma omp for nowait
             for (int i = 0; i < num_penguins; i++) {
                 double current_length = calculate_path_length(population[i], num_cities);
 
+                // Thread-safe logging
                 #pragma omp critical
                 fprintf(log_file, "%d,%d,%.2f\n", iter + 1, i, current_length);
 
+                // Track best in this thread
                 if (current_length < local_best) {
                     local_best = current_length;
                     local_leader = i;
                 }
             }
 
+            // Update global leader under critical section
             #pragma omp critical
             {
                 if (local_best < leader_length) {
@@ -157,8 +226,9 @@ void run_epo(City cities[], int num_cities, int num_penguins, int num_iterations
             }
         }
 
-        printf("   >> Leader: Pinguino %d con lunghezza %.2f\n", leader_index, leader_length);
+        printf("   >> Leader: Penguin %d with length %.2f\n", leader_index, leader_length);
 
+        // Update overall best path if improved
         if (leader_length < best_length) {
             best_length = leader_length;
             for (int i = 0; i < num_cities; i++) {
@@ -166,6 +236,7 @@ void run_epo(City cities[], int num_cities, int num_penguins, int num_iterations
             }
         }
 
+        // Copy-and-mutate each penguin based on leader
         #pragma omp parallel for
         for (int i = 0; i < num_penguins; i++) {
             if (i == leader_index) continue;
@@ -176,56 +247,66 @@ void run_epo(City cities[], int num_cities, int num_penguins, int num_iterations
     }
 
     fclose(log_file);
-    printf(">> Fine EPO\n");
+    printf(">> End of EPO\n");
 }
 
+/**
+ * Program entry point: sets up environment, reads input, and executes EPO.
+ *
+ * Usage: %s <city_file> <num_cities> <num_iterations>
+ */
 int main(int argc, char *argv[]) {
-    printf(">> OpenMP: %d thread disponibili\n", omp_get_max_threads());
+    // Display number of OpenMP threads available
+    printf(">> OpenMP: %d threads available\n", omp_get_max_threads());
 
     if (argc != 4) {
-        printf("Uso: %s <file_citta> <numero_citta> <numero_iterazioni>\n", argv[0]);
+        printf("Usage: %s <city_file> <city_number> <iteration_number>\n", argv[0]);
         return 1;
     }
 
+    // Seed random number generator once
     srand(time(NULL));
 
     const char *filename = argv[1];
     int num_cities = atoi(argv[2]);
     int num_iterations = atoi(argv[3]);
+
+    // Determine number of penguins (agents)
     int num_penguins = num_cities / 100;
     if (num_penguins < 5) num_penguins = 5;
 
     if (num_cities > MAX_CITIES) {
-        printf("Errore: numero città troppo grande. Max consentito: %d\n", MAX_CITIES);
+        printf("Error: City number too large. Max allowed: %d\n", MAX_CITIES);
         return 1;
     }
     if (num_penguins > MAX_PENGUINS) {
-        printf("Errore: numero pinguini troppo grande. Max consentito: %d\n", MAX_PENGUINS);
+        printf("Error: Number of penguins too large. Max allowed: %d\n", MAX_PENGUINS);
         return 1;
     }
 
+    // Read city coordinates from file
     City cities[MAX_CITIES];
     if (!read_cities(filename, cities, num_cities)) {
-        printf("Errore nella lettura delle città.\n");
+        printf("Error reading cities.\n");
         return 1;
     }
 
+    // Array to store the best path found
     City best_path[MAX_CITIES];
 
-    // TIMER START
+    // Start timer
     double start_time = omp_get_wtime();
 
+    // Run the EPO algorithm
     run_epo(cities, num_cities, num_penguins, num_iterations, best_path);
 
-    // TIMER END
+    // End timer
     double end_time = omp_get_wtime();
 
-    printf("\n>> Calcolo percorso migliore terminato\n");
+    printf("\n>> Best route calculation completed\n");
     double best_length = calculate_path_length(best_path, num_cities);
-    printf("\nMiglior percorso trovato (lunghezza: %.2f)\n", best_length);
-
-    // STAMPA TEMPO
-    printf("\n>> Tempo di esecuzione: %.3f secondi\n", end_time - start_time);
+    printf("\nBest path found (length: %.2f)\n", best_length);
+    printf("\n>> Execution time: %.3f seconds\n", end_time - start_time);
 
     return 0;
 }

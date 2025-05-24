@@ -95,6 +95,8 @@ gcc generate_cities.c -o generate_cities
 
 ### Plotting Results
 ```bash
+# Interactive graph of fitness distribution per iteration
 python3 plot_epo.py
+# Graph of the best fitness per iteration
 python3 plot_epo2.py
 ```
