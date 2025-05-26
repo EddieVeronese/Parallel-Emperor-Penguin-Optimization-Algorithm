@@ -39,7 +39,7 @@ It also includes a city generator and two Python scripts for plotting EPO execut
 
 ## Installation and Usage
 
-### 1. Compile and run OpenMP version
+### 1. Compile and run MPI version
 1. **Go to folder**  
    ```bash
    cd Parallel/MPI
