@@ -13,6 +13,11 @@ It also includes a city generator and two Python scripts for plotting EPO execut
 ├── generate_cities.c              # generates a cities.txt file with N random cities
 ├── plot_epo.py                    # EPO log plotting script
 ├── plot_epo2.py                   # EPO log plotting script
+├── Serial
+│   ├── cities.txt                 # input city file
+│   ├── epo_log.csv                # output log file
+│   └── tsp_epo.c              # Seial C implementation
+│   └── tsp_epo.sh             # test script
 ├── Parallel
 │   ├── MPI
 │   │   ├── cities.txt             # input city file
