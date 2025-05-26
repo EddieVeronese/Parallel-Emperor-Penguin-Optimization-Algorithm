@@ -16,8 +16,8 @@ It also includes a city generator and two Python scripts for plotting EPO execut
 ├── Serial
 │   ├── cities.txt                 # input city file
 │   ├── epo_log.csv                # output log file
-│   └── tsp_epo.c              # Seial C implementation
-│   └── tsp_epo.sh             # test script
+│   └── tsp_epo.c                  # Seial C implementation
+│   └── tsp_epo.sh                 # test script
 ├── Parallel
 │   ├── MPI
 │   │   ├── cities.txt             # input city file
