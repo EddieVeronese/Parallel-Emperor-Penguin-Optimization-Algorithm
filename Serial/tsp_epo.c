@@ -147,9 +147,18 @@ void run_epo(City cities[], int num_cities, int num_penguins,
     printf(">> Generated initial random paths for penguins\n");
 
     double global_best = INFINITY;
+    int last_improve = 0;
 
     // Main loop
     for (int iter = 0; iter < num_iterations; iter++) {
+
+        //Stop criterion
+        if (iter - last_improve >= 100) {
+            printf(">> Stop: no improvement after %d iterations, exiting at step %d\n",
+                   iter - last_improve, iter);
+            break;
+        }
+
         printf(">> Iteration %d/%d\n", iter+1, num_iterations);
 
         // find best local
@@ -170,6 +179,7 @@ void run_epo(City cities[], int num_cities, int num_penguins,
         // update global best
         if (leader_len < global_best) {
             global_best = leader_len;
+            last_improve = iter;
             for (int j = 0; j < num_cities; j++) {
                 best_path[j] = population[leader_idx][j];
             }
