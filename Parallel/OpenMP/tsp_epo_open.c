@@ -210,7 +210,7 @@ void run_epo(City cities[], int num_cities, int num_penguins, int num_iterations
             double local_best = INFINITY;
 
             // Distribute work among threads
-            #pragma omp for nowait
+            #pragma omp for private(current_length) nowait
             for (int i = 0; i < num_penguins; i++) {
                 double current_length = calculate_path_length(population[i], num_cities);
 
